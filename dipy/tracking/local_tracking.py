@@ -8,6 +8,7 @@ from dipy.tracking.stopping_criterion import (AnatomicalStoppingCriterion,
                                               StreamlineStatus)
 from dipy.tracking import utils
 from dipy.utils import fast_numpy
+import copy
 
 
 class LocalTracking:
@@ -159,8 +160,9 @@ class LocalTracking:
         B = F.copy()
         for i, s in enumerate(self.seeds):
             s = np.dot(lin, s) + offset
+
             # Set the random seed in numpy, random and fast_numpy (lic.stdlib)
-            if self.random_seed is not None:
+            if self.random_seed is not None:  # don't use this (set random_seed = None)
                 s_random_seed = hash(np.abs((np.sum(s)) + self.random_seed)) \
                     % (np.iinfo(np.uint32).max - 1)
                 random.seed(s_random_seed)
@@ -169,14 +171,14 @@ class LocalTracking:
 
             if self.initial_directions is None:
                 directions = self.direction_getter.initial_direction(s)
-            else:
+            else:  # dont use this (Set initial_directions = None)
                 # normalize the initial directions.
                 # initial directions with norm 0 are removed.
                 d_ns = np.linalg.norm(self.initial_directions[i, :, :], axis=1)
                 directions = self.initial_directions[i, d_ns > 0, :] \
                     / d_ns[d_ns > 0, np.newaxis]
 
-            if len(directions) == 0 and self.return_all:
+            if len(directions) == 0 and self.return_all:  # set return_all = False
                 # only the seed position
                 if self.save_seeds:
                     yield [s], s
@@ -189,43 +191,35 @@ class LocalTracking:
             directions = directions[:self.max_cross]
 
             for first_step in directions:
-                stepsF = stepsB = 1
-                stepsF, stream_status = self._tracker(s, first_step, F)
-                if not (self.return_all
-                        or stream_status in (StreamlineStatus.ENDPOINT,
-                                             StreamlineStatus.OUTSIDEIMAGE)):
-                    continue
+                # get first steps (opposite directions)
+                f_first_step = copy.deepcopy(first_step)
+                b_first_step = copy.deepcopy(-1 * first_step)
 
-                if not self.unidirectional:
-                    first_step = -first_step
-                    if stepsF > 1:
-                        # Use the opposite of the first selected orientation for
-                        # the backward tracking segment
-                        opposite_step = F[0] - F[1]
-                        opposite_step_norm = np.linalg.norm(opposite_step)
-                        if opposite_step_norm > 0:
-                            first_step = opposite_step / opposite_step_norm
-                    stepsB, stream_status = self._tracker(s, first_step, B)
-                    if not (self.return_all or
-                            stream_status in (StreamlineStatus.ENDPOINT,
-                                              StreamlineStatus.OUTSIDEIMAGE)):
-                        continue
+                # get seeds (slightly offset)
+                seedF = s + (0.001 * f_first_step)
+                seedB = s + (0.001 * b_first_step)
 
-                if stepsB == 1:
-                    streamline = F[:stepsF].copy()
+                # track and conditionally return forward stream
+                stepsF, f_status = self._tracker(seedF, f_first_step, F)
+                if not (self.return_all or f_status in (StreamlineStatus.ENDPOINT, StreamlineStatus.OUTSIDEIMAGE)):
+                    pass  # don't want to save this portion of the streamline, is only seed point
                 else:
-                    parts = (B[stepsB - 1:0:-1], F[:stepsF])
-                    streamline = np.concatenate(parts, axis=0)
-
-                # move to the next streamline if only the seed position
-                # and not return all
-                len_sl = len(streamline)
-                if len_sl >= self.min_length and len_sl <= self.max_length \
-                    or self.return_all:
-                        if self.save_seeds:
-                            yield streamline, s
-                        else:
-                            yield streamline
+                    f_stream = F[:stepsF].copy()
+                    if self.save_seeds:
+                        yield f_stream, seedF
+                    else:
+                        yield f_stream
+                
+                # track and conditionally return backward steps
+                stepsB, b_status = self._tracker(seedB, b_first_step, B)
+                if not (self.return_all or b_status in (StreamlineStatus.ENDPOINT, StreamlineStatus.OUTSIDEIMAGE)):
+                    pass  # don't want to save this portion of the streamline
+                else:
+                    b_stream = B[:stepsB].copy()
+                    if self.save_seeds:
+                        yield b_stream, seedB
+                    else:
+                        yield b_stream
 
 
 class ParticleFilteringTracking(LocalTracking):

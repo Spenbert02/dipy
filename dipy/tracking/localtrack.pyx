@@ -3,11 +3,16 @@ from random import random
 
 cimport cython
 cimport numpy as cnp
-from dipy.tracking.direction_getter cimport DirectionGetter
+from dipy.tracking.direction_getter cimport DirectionGetter, generate_streamline_rk4
 from dipy.tracking.stopping_criterion cimport(
     StreamlineStatus, StoppingCriterion, AnatomicalStoppingCriterion,
     TRACKPOINT, ENDPOINT, OUTSIDEIMAGE, INVALIDPOINT, PYERROR)
 from dipy.utils.fast_numpy cimport cumsum, where_to_insert, copy_point
+
+
+class TrackingMethods:  # SB 7/22/2024
+    EuDX = 0
+    RK4 = 1
 
 
 def local_tracker(
@@ -18,7 +23,8 @@ def local_tracker(
         double[::1] voxel_size,
         cnp.float_t[:, :] streamline,
         double step_size,
-        int fixedstep):
+        int fixedstep,
+        int method):
     """Tracks one direction from a seed.
 
     This function is the main workhorse of the ``LocalTracking`` class defined
@@ -45,6 +51,9 @@ def local_tracker(
     fixedstep : int
         If greater than 0, a fixed step_size is used, otherwise a variable
         step size is used.
+    method : int
+        Enumeration for tractography method, default to 0 (EuDX). Enumeration provided
+        by TrackingMethods class
 
     Returns
     -------
@@ -69,10 +78,18 @@ def local_tracker(
     copy_point(&seed_pos[0], input_seed_pos)
 
     stream_status = TRACKPOINT
-    i, stream_status = dg.generate_streamline(input_seed_pos, input_direction,
-                                              input_voxel_size, step_size, sc,
-                                              streamline, stream_status,
-                                              fixedstep)
+    if method == TrackingMethods.EuDX:
+        i, stream_status = dg.generate_streamline(input_seed_pos, input_direction,
+                                                input_voxel_size, step_size, sc,
+                                                streamline, stream_status,
+                                                fixedstep)
+    elif method == TrackingMethods.RK4:
+        i, stream_status = generate_streamline_rk4(dg, input_seed_pos, input_direction,
+                                                  input_voxel_size, step_size, sc,
+                                                  streamline, stream_status,
+                                                  fixedstep)
+    else:  # should raise error here eventually
+        pass
     return i, stream_status
 
 

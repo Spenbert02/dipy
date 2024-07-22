@@ -3,7 +3,7 @@ from collections.abc import Iterable
 from warnings import warn
 import numpy as np
 
-from dipy.tracking.localtrack import local_tracker, pft_tracker
+from dipy.tracking.localtrack import local_tracker, pft_tracker, TrackingMethods
 from dipy.tracking.stopping_criterion import (AnatomicalStoppingCriterion,
                                               StreamlineStatus)
 from dipy.tracking import utils
@@ -141,7 +141,8 @@ class LocalTracking:
                              self._voxel_size,
                              streamline,
                              self.step_size,
-                             self.fixed_stepsize)
+                             self.fixed_stepsize,
+                             TrackingMethods.EuDX)
 
     def __iter__(self):
         # Make tracks, move them to point space and return
@@ -225,6 +226,40 @@ class LocalTracking:
                             yield b_stream, seedB
                         else:
                             yield b_stream
+
+
+class RungeKutta4Tracking(LocalTracking):  # written by SB 7/19/2024
+
+    def __init__(self, direction_getter, stopping_criterion, seeds, affine,
+                 step_size, max_cross=None, maxlen=500, minlen=2,
+                 fixedstep=True, return_all=True, random_seed=None,
+                 save_seeds=False, unidirectional=False,
+                 randomize_forward_direction=False, initial_directions=None):
+        """A streamline generator using 4th order Runge-Kutta tractography. Implemented
+        by SB in the Spenbert02/dipy fork of the main dipy repository
+
+        Parameters
+        ----------
+        the exact same as the LocalTracking class
+        """
+
+        # call LocalTracking constructor
+        super().__init__(direction_getter, stopping_criterion, seeds, affine,
+                 step_size, max_cross, maxlen, minlen,
+                 fixedstep, return_all, random_seed,
+                 save_seeds, unidirectional,
+                 randomize_forward_direction, initial_directions)
+        
+    def _tracker(self, seed, first_step, streamline):
+        return local_tracker(self.direction_getter,
+                             self.stopping_criterion,
+                             seed,
+                             first_step,
+                             self._voxel_size,
+                             streamline,
+                             self.step_size,
+                             self.fixed_stepsize,
+                             TrackingMethods.RK4)
 
 
 class ParticleFilteringTracking(LocalTracking):

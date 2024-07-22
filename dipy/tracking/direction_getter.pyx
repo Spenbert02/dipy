@@ -144,6 +144,7 @@ cdef class DirectionGetter:
         pass
 
 
+# SB 7/22/2024
 @cython.boundscheck(False)
 @cython.wraparound(False)
 @cython.cdivision(True)
@@ -161,7 +162,14 @@ cpdef tuple generate_streamline_rk4(DirectionGetter dg,
         cnp.npy_intp i
         cnp.npy_intp len_streamlines = streamline.shape[0]
         double point[3]
-        double voxdir[3]
+        double midpoint[3]  # 'midpoint' for runge kutta tracking
+        double k1_unit_vox[3]  # k1 in voxel coordinates, unit in world coordinates
+        double k2_unit_vox[3]  # k2 in voxel coordinates, unit in world coordinates
+        double k3_unit_vox[3]  # k3 in voxel coords, unit in world
+        double k4_unit_vox[3]  # k4 in voxel coords, unit in world
+        double k_vox_sum_dir[3]  # (1/6) * (k1 + (2 * k2) + (2 * k3) + k4)
+        double world_unit_dir[3]  # normalized k_sum_dir
+        double voxdir[3]  # final step vector in unit vox coords
         void (*step)(double*, double*, double) nogil
 
     if fixedstep > 0:
@@ -172,14 +180,55 @@ cpdef tuple generate_streamline_rk4(DirectionGetter dg,
     copy_point(&seed[0], point)
     copy_point(&seed[0], &streamline[0,0])
 
-    print("a", end="")  # TESTING
-
     stream_status = TRACKPOINT
     for i in range(1, len_streamlines):
         if i != 1 and dg.get_direction_c(point, &direction[0]):  # don't get direction for first iteration
             break
+
+        # RK first iteration
+        for j in range(3):  # copy first direction into k1
+            k1_unit_vox[j] = direction[j] / voxel_size[j]
+        copy_point(point, midpoint)  # set midpoint=point for stepping
+        step(midpoint, k1_unit_vox, step_size/2.0)  # half step size along k1 to first midpoint
+        k1_midpoint_status = stopping_criterion.check_point_c(midpoint)
+        if k1_midpoint_status != TRACKPOINT:  # if can't get direction from k1 midpoint, must stop tracking
+            break
+        
+        # RK second iteration - direction holds k1 in world scale
+        if dg.get_direction_c(midpoint, &direction[0]):  # break if cant get direction
+            break
         for j in range(3):
-            voxdir[j] = direction[j] / voxel_size[j]
+            k2_unit_vox[j] = direction[j] / voxel_size[j]
+        copy_point(point, midpoint)  # reset midpoint=point for stepping
+        step(midpoint, k2_unit_vox, step_size/2.0)  # half step along k2 to second midpoint
+        k2_midpoint_status = stopping_criterion.check_point_c(midpoint)
+        if k2_midpoint_status != TRACKPOINT:  # k2 midpoint is out of mask, stop tracking
+            break
+
+        # RK third iteration
+        if dg.get_direction_c(midpoint, &direction[0]):  # break if cant get direction
+            break
+        for j in range(3):
+            k3_unit_vox[j] = direction[j] / voxel_size[j]
+        copy_point(point, midpoint)  # reset midpoint=point
+        step(midpoint, k3_unit_vox, step_size)  # full step along k3 to get point at which k4 is taken
+        k3_endpoint_status = stopping_criterion.check_point_c(midpoint)
+        if k3_endpoint_status != TRACKPOINT:  # if k3 endpoint is out of mask, stop tracking
+            break
+        
+        # RK final iteration and calculation
+        if dg.get_direction_c(midpoint, &direction[0]):  # if cant get direction at endpoint of k3 propagation, stop tracking
+            break
+        for j in range(3):  # update k4 in vox coords, and get weighted sum of k directions in voxel coords
+            k4_unit_vox[j] = direction[j] / voxel_size[j]
+            k_vox_sum_dir[j] = (1.0/6.0) * (k1_unit_vox[j] + (2.0 * k2_unit_vox[j]) + (2.0 * k3_unit_vox[j]) + k4_unit_vox[j])
+        for j in range(3):
+            world_unit_dir[j] = k_vox_sum_dir[j] * voxel_size[j]
+        for j in range(3):
+            world_unit_dir[j] = world_unit_dir[j] / (pow(pow(world_unit_dir[0], 2.0) + pow(world_unit_dir[1], 2.0) + pow(world_unit_dir[2], 2.0), 0.5))
+        for j in range(3):
+            voxdir[j] = world_unit_dir[j] / voxel_size[j]
+
         step(point, voxdir, step_size)
         copy_point(point, &streamline[i, 0])
         stream_status = stopping_criterion.check_point_c(point)
